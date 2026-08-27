@@ -1,0 +1,18 @@
+# The agent's working memory: daily notes, plans, pipeline state, anything it wrote about real
+# people or a real business. A live agent workspace is not a repository - keep this local.
+memory/*
+!memory/README.md
+life/
+pipeline/
+*.bak/
+
+# credentials - never, in any form
+credentials/
+*.env
+.env*
+*token*.json
+*credentials*.json
+
+.DS_Store
+.clawhub/
+.openclaw/

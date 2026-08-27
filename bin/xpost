@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""
+xpost — X/Twitter v2 API CLI
+Usage: xpost <command> [args] [--count N] [--pretty] [--text]
+"""
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+def load_keys():
+    env_file = Path.home() / ".config" / "x-api" / "keys.env"
+    if not env_file.exists():
+        print(json.dumps({"status": "error", "error": f"Keys file not found: {env_file}"}))
+        sys.exit(1)
+    keys = {}
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            keys[k.strip()] = v.strip()
+    return keys
+
+def get_client(keys):
+    import tweepy
+    return tweepy.Client(
+        bearer_token=keys.get("X_BEARER_TOKEN"),
+        consumer_key=keys["X_API_KEY"],
+        consumer_secret=keys["X_API_SECRET"],
+        access_token=keys["X_ACCESS_TOKEN"],
+        access_token_secret=keys["X_ACCESS_TOKEN_SECRET"],
+    )
+
+def output(data, pretty=False, text_mode=False):
+    if text_mode:
+        if isinstance(data, dict):
+            if "error" in data:
+                print(f"ERROR: {data['error']}")
+            elif "id" in data:
+                print(f"ID: {data['id']}")
+                if "text" in data:
+                    print(f"Text: {data['text']}")
+            elif "tweets" in data:
+                for t in data["tweets"]:
+                    print(f"[{t.get('id','')}] {t.get('author_id','')}: {t.get('text','')}")
+            else:
+                print(json.dumps(data))
+        else:
+            print(data)
+    elif pretty:
+        print(json.dumps(data, indent=2))
+    else:
+        print(json.dumps(data))
+
+def cmd_post(client, keys, args):
+    import tweepy
+    text = " ".join(args.text)
+    try:
+        resp = client.create_tweet(text=text, user_auth=True)
+        return {"status": "ok", "id": resp.data["id"], "text": text}
+    except tweepy.TweepyException as e:
+        return {"status": "error", "error": str(e)}
+
+def cmd_reply(client, keys, args):
+    import tweepy
+    tweet_id = args.tweet_id
+    text = " ".join(args.text)
+    try:
+        resp = client.create_tweet(text=text, in_reply_to_tweet_id=tweet_id, user_auth=True)
+        return {"status": "ok", "id": resp.data["id"], "text": text}
+    except tweepy.TweepyException as e:
+        return {"status": "error", "error": str(e)}
+
+def cmd_quote(client, keys, args):
+    import tweepy
+    tweet_id = args.tweet_id
+    text = " ".join(args.text)
+    try:
+        resp = client.create_tweet(text=text, quote_tweet_id=tweet_id, user_auth=True)
+        return {"status": "ok", "id": resp.data["id"], "text": text}
+    except tweepy.TweepyException as e:
+        return {"status": "error", "error": str(e)}
+
+def cmd_delete(client, keys, args):
+    import tweepy
+    try:
+        resp = client.delete_tweet(id=args.tweet_id, user_auth=True)
+        return {"status": "ok", "deleted": resp.data["deleted"]}
+    except tweepy.TweepyException as e:
+        return {"status": "error", "error": str(e)}
+
+def cmd_like(client, keys, args):
+    import tweepy
+    try:
+        resp = client.like(tweet_id=args.tweet_id, user_auth=True)
+        return {"status": "ok", "liked": resp.data["liked"]}
+    except tweepy.TweepyException as e:
+        return {"status": "error", "error": str(e)}
+
+def cmd_retweet(client, keys, args):
+    import tweepy
+    try:
+        resp = client.retweet(tweet_id=args.tweet_id, user_auth=True)
+        return {"status": "ok", "retweeted": resp.data["retweeted"]}
+    except tweepy.TweepyException as e:
+        return {"status": "error", "error": str(e)}
+
+def cmd_mentions(client, keys, args):
+    import tweepy
+    user_id = keys["X_USER_ID"]
+    count = args.count if hasattr(args, "count") and args.count else 20
+    try:
+        resp = client.get_users_mentions(
+            id=user_id,
+            max_results=min(count, 100),
+            tweet_fields=["id", "text", "author_id", "created_at"],
+            user_auth=True,
+        )
+        tweets = []
+        if resp.data:
+            for t in resp.data:
+                tweets.append({"id": str(t.id), "text": t.text, "author_id": str(t.author_id)})
+        return {"status": "ok", "tweets": tweets}
+    except tweepy.TweepyException as e:
+        return {"status": "error", "error": str(e)}
+
+def cmd_timeline(client, keys, args):
+    import tweepy
+    count = args.count if hasattr(args, "count") and args.count else 10
+    try:
+        user_resp = client.get_user(username=args.username)
+        if not user_resp.data:
+            return {"status": "error", "error": f"User not found: {args.username}"}
+        uid = user_resp.data.id
+        resp = client.get_users_tweets(
+            id=uid,
+            max_results=min(max(count, 5), 100),
+            tweet_fields=["id", "text", "author_id", "created_at"],
+            exclude=["retweets", "replies"],
+        )
+        tweets = []
+        if resp.data:
+            for t in resp.data:
+                tweets.append({"id": str(t.id), "text": t.text})
+        return {"status": "ok", "username": args.username, "tweets": tweets}
+    except tweepy.TweepyException as e:
+        return {"status": "error", "error": str(e)}
+
+def cmd_home(client, keys, args):
+    import tweepy
+    count = args.count if hasattr(args, "count") and args.count else 20
+    try:
+        resp = client.get_home_timeline(
+            max_results=min(count, 100),
+            tweet_fields=["id", "text", "author_id", "created_at"],
+            user_auth=True,
+        )
+        tweets = []
+        if resp.data:
+            for t in resp.data:
+                tweets.append({"id": str(t.id), "text": t.text, "author_id": str(t.author_id)})
+        return {"status": "ok", "tweets": tweets}
+    except tweepy.TweepyException as e:
+        return {"status": "error", "error": str(e)}
+
+def cmd_search(client, keys, args):
+    import tweepy
+    count = args.count if hasattr(args, "count") and args.count else 10
+    query = " ".join(args.query)
+    try:
+        resp = client.search_recent_tweets(
+            query=query,
+            max_results=min(max(count, 10), 100),
+            tweet_fields=["id", "text", "author_id", "created_at"],
+        )
+        tweets = []
+        if resp.data:
+            for t in resp.data:
+                tweets.append({"id": str(t.id), "text": t.text, "author_id": str(t.author_id)})
+        return {"status": "ok", "query": query, "tweets": tweets}
+    except tweepy.TweepyException as e:
+        return {"status": "error", "error": str(e)}
+
+def cmd_get(client, keys, args):
+    import tweepy
+    try:
+        resp = client.get_tweet(
+            id=args.tweet_id,
+            tweet_fields=["id", "text", "author_id", "created_at"],
+        )
+        if resp.data:
+            t = resp.data
+            return {"status": "ok", "id": str(t.id), "text": t.text, "author_id": str(t.author_id)}
+        return {"status": "error", "error": "Tweet not found"}
+    except tweepy.TweepyException as e:
+        return {"status": "error", "error": str(e)}
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="xpost",
+        description="X/Twitter v2 API CLI",
+    )
+    parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
+    parser.add_argument("--text", action="store_true", help="Plain text output")
+
+    # Shared flags for subcommands
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
+    shared.add_argument("--text", action="store_true", help="Plain text output")
+
+    sub = parser.add_subparsers(dest="command")
+
+    # post
+    p_post = sub.add_parser("post", help="Post a tweet", parents=[shared])
+    p_post.add_argument("text", nargs="+", help="Tweet text")
+
+    # reply
+    p_reply = sub.add_parser("reply", help="Reply to a tweet", parents=[shared])
+    p_reply.add_argument("tweet_id", help="Tweet ID to reply to")
+    p_reply.add_argument("text", nargs="+", help="Reply text")
+
+    # quote
+    p_quote = sub.add_parser("quote", help="Quote tweet", parents=[shared])
+    p_quote.add_argument("tweet_id", help="Tweet ID to quote")
+    p_quote.add_argument("text", nargs="+", help="Quote text")
+
+    # delete
+    p_delete = sub.add_parser("delete", help="Delete a tweet", parents=[shared])
+    p_delete.add_argument("tweet_id", help="Tweet ID to delete")
+
+    # like
+    p_like = sub.add_parser("like", help="Like a tweet", parents=[shared])
+    p_like.add_argument("tweet_id", help="Tweet ID to like")
+
+    # retweet
+    p_rt = sub.add_parser("retweet", help="Retweet a tweet", parents=[shared])
+    p_rt.add_argument("tweet_id", help="Tweet ID to retweet")
+
+    # mentions
+    p_mentions = sub.add_parser("mentions", help="Get recent mentions", parents=[shared])
+    p_mentions.add_argument("--count", type=int, default=20, help="Number of mentions")
+
+    # timeline
+    p_tl = sub.add_parser("timeline", help="Get user timeline", parents=[shared])
+    p_tl.add_argument("username", help="X username (without @)")
+    p_tl.add_argument("--count", type=int, default=10, help="Number of tweets")
+
+    # home
+    p_home = sub.add_parser("home", help="Get home timeline", parents=[shared])
+    p_home.add_argument("--count", type=int, default=20, help="Number of tweets")
+
+    # search
+    p_search = sub.add_parser("search", help="Search recent tweets", parents=[shared])
+    p_search.add_argument("query", nargs="+", help="Search query")
+    p_search.add_argument("--count", type=int, default=10, help="Number of results")
+
+    # get
+    p_get = sub.add_parser("get", help="Get a single tweet", parents=[shared])
+    p_get.add_argument("tweet_id", help="Tweet ID")
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(0)
+
+    keys = load_keys()
+    client = get_client(keys)
+
+    dispatch = {
+        "post": cmd_post,
+        "reply": cmd_reply,
+        "quote": cmd_quote,
+        "delete": cmd_delete,
+        "like": cmd_like,
+        "retweet": cmd_retweet,
+        "mentions": cmd_mentions,
+        "timeline": cmd_timeline,
+        "home": cmd_home,
+        "search": cmd_search,
+        "get": cmd_get,
+    }
+
+    result = dispatch[args.command](client, keys, args)
+    output(result, pretty=args.pretty, text_mode=args.text)
+
+
+if __name__ == "__main__":
+    main()
