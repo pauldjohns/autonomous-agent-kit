@@ -16,3 +16,6 @@ credentials/
 .DS_Store
 .clawhub/
 .openclaw/
+
+# the example file must always be committable
+!.env.example
